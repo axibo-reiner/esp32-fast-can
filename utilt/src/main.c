@@ -90,6 +90,7 @@ void set_decel(uint8_t device_id, uint32_t val);
 void set_current(uint8_t device_id, uint32_t val);
 void set_current_hold(uint8_t device_id, uint32_t val);
 void set_high_speed_mode(uint8_t device_id, uint32_t val);
+void update_initial_positions(can_t *canbus);
 
 void init_uart_usb_interface(can_t *can_bus, uint32_t baud, char *serial_port)
 {
@@ -239,16 +240,42 @@ void send_all_moves(can_t *canbus, all_axis_move_t *move)
     messages[2].id = 4;
     messages[2].len = 5;
     send_can_packets(canbus, messages, 3);
-    //printf("Sent %f %f %f\n", move->roll / PTR_ENCODER_RATIO, move->roll, PTR_ENCODER_RATIO);
+    // printf("Sent %f %f %f\n", move->roll / PTR_ENCODER_RATIO, move->roll, PTR_ENCODER_RATIO);
+}
+
+void update_initial_positions(can_t *canbus)
+{
+    can_message_t messages[3];
+    for (int i = 0; i < 4; i++)
+    {
+        int32_to_buffer(0x2a, (int32_t)(1 / PTR_ENCODER_RATIO), messages[0].data);
+        messages[0].id = 2;
+        messages[0].len = 5;
+        int32_to_buffer(0x2a, (int32_t)(1 / PTR_ENCODER_RATIO), messages[1].data);
+        messages[1].id = 3;
+        messages[1].len = 5;
+        int32_to_buffer(0x2a, (int32_t)(1 / PTR_ENCODER_RATIO), messages[2].data);
+        messages[2].id = 4;
+        messages[2].len = 5;
+        send_can_packets(canbus, messages, 3);
+        usleep(10000);
+    }
+
+    // print the initial positions
+    log_info("Initial Pan: %f Tilt: %f Roll: %f", in_pan.PositionValue, in_tilt.PositionValue, in_roll.PositionValue);
 }
 
 // super loop
 void main()
 {
 
+    float initial_pan = 0.0;
+    float initial_tilt = 0.0;
+    float initial_roll = 0.0;
+
     init_uart_usb_interface(&canbus, 3000000, "/dev/ttyUSB0");
     // sleep for 5 seconds
-    // reset_bus(&canbus);
+    reset_bus(&canbus);
 
     pthread_t rx_thread;
     pthread_create(&rx_thread, NULL, (void *)uart_rx_thread, NULL);
@@ -259,37 +286,14 @@ void main()
     move.roll = 3.0;
 
     uint8_t buffer[8] = {0x54, 0, 0, 0, 0, 0, 0, 0};
-    usleep(10000);
-    send_single_packet(&canbus, 0x02, 1, buffer);
-    usleep(10000);
-    send_single_packet(&canbus, 0x03, 1, buffer);
-    usleep(10000);
-    send_single_packet(&canbus, 0x04, 1, buffer);
-    usleep(10000);
 
+    log_warn("Startup must happen from PTv1.5 on same bus");
 
-    set_current(2,22);
-    set_current(3,22);
-    set_current(4,22);
+    update_initial_positions(&canbus);
+    initial_pan = in_pan.PositionValue;
+    initial_tilt = in_tilt.PositionValue;
+    initial_roll = in_roll.PositionValue;
 
-//     set_accel(2, 14000);
-//     usleep(10000);
-//     set_accel(3, 14000);
-// usleep(10000);
-//     set_accel(4, 14000);
-
-//     set_speed(2, 20000);
-//     set_speed(3, 20000);
-//     set_speed(4, 20000);
-//     //while (1);
-//     set_decel(2, 14000);
-//     set_decel(3, 14000);
-//     set_decel(4, 14000);
-    // set_high_speed_mode(2, 1);
-    // set_high_speed_mode(3, 1);
-    // set_high_speed_mode(4, 1);
-
-    usleep(1000000);
     log_info("Starting super loop");
     performance_monitor_t pm;
     performance_monitor_init(&pm);
@@ -302,22 +306,23 @@ void main()
         performance_monitor_update(&pm);
         performance_monitor_print(&pm);
         // send_single_packet(&canbus, 0x02, 1, buffer);
+
+        counter += 1;
+        float val = sin((float)(counter) / 2000);
+        float val_cos = cos((float)(counter) / 2000);
+        out_pan.TargetPosition = val * 25 + initial_pan;
+        out_tilt.TargetPosition = val * 25 + initial_tilt;
+        out_roll.TargetPosition = val * 25 + initial_roll;
         move.pan = out_pan.TargetPosition;
         move.tilt = out_tilt.TargetPosition;
         move.roll = out_roll.TargetPosition;
         send_all_moves(&canbus, &move);
-
-        counter += 1;
-        float val = sin((float)(counter) / 1000);
-        out_pan.TargetPosition = val * 5;
-        out_tilt.TargetPosition = val * 5;
-        out_roll.TargetPosition = val * 5;
         // print the current position
         log_info("IN Pan: %f Tilt: %f Roll: %f", in_pan.PositionValue, in_tilt.PositionValue, in_roll.PositionValue);
 
         // log the requested into
         log_info("OUT Pan: %f Tilt: %f Roll: %f", out_pan.TargetPosition, out_tilt.TargetPosition, out_roll.TargetPosition);
-        log_info("Fllowing error: %f", out_pan.TargetPosition - in_pan.PositionValue);
+        log_info("Fllowing error PAN: %f Tilt: %f Roll: %f", out_pan.TargetPosition - in_pan.PositionValue, out_tilt.TargetPosition - in_tilt.PositionValue, out_roll.TargetPosition - in_roll.PositionValue);
     }
 }
 
@@ -407,7 +412,7 @@ void uart_rx_thread()
             }
             decode_frame_to_position(ToCanTx);
             // print the packet
-            //log_info("ID: %d Len: %d Data: %x %x %x %x %x", ToCanTx.id, ToCanTx.len, ToCanTx.data[0], ToCanTx.data[1], ToCanTx.data[2], ToCanTx.data[3], ToCanTx.data[3]);
+            // log_info("ID: %d Len: %d Data: %x %x %x %x %x", ToCanTx.id, ToCanTx.len, ToCanTx.data[0], ToCanTx.data[1], ToCanTx.data[2], ToCanTx.data[3], ToCanTx.data[3]);
         }
 
         // condition if we started to receive half way through another message
@@ -431,7 +436,7 @@ void decode_frame_to_position(can_message_t can_message)
     }
 
     // print the value
-    //log_info("ID: %d Value: %d", can_message.id, u.f);
+    // log_info("ID: %d Value: %d", can_message.id, u.f);
 
     if (can_message.id == 2)
     {
@@ -503,4 +508,3 @@ void set_high_speed_mode(uint8_t device_id, uint32_t val)
     messages[0].len = 5;
     send_can_packets(&canbus, messages, 1);
 }
-
