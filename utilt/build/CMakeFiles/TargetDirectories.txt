@@ -1,0 +1,3 @@
+/home/mangokid/Documents/PlatformIO/Projects/esp32_fast_can/utilt/build/CMakeFiles/template_project.dir
+/home/mangokid/Documents/PlatformIO/Projects/esp32_fast_can/utilt/build/CMakeFiles/edit_cache.dir
+/home/mangokid/Documents/PlatformIO/Projects/esp32_fast_can/utilt/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/template_project.dir/src/main.c.o -o template_project  -lm 
