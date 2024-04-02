@@ -287,7 +287,15 @@ void main()
 
     uint8_t buffer[8] = {0x54, 0, 0, 0, 0, 0, 0, 0};
 
-    log_warn("Startup must happen from PTv1.5 on same bus");
+    //log_warn("Startup must happen from PTv1.5 on same bus");
+
+    //send 0x54 to wake them up
+    send_single_packet(&canbus, 2, 1, buffer);
+    usleep(100000);
+    send_single_packet(&canbus, 3, 1, buffer);
+    usleep(100000);
+    send_single_packet(&canbus, 4, 1, buffer);
+    usleep(100000);
 
     update_initial_positions(&canbus);
     initial_pan = in_pan.PositionValue;

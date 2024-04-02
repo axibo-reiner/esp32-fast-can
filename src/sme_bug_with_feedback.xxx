@@ -5,7 +5,6 @@ SemaphoreHandle_t mySemaphore;
 
 #define SERIAL_RX_BUFFER_SIZE 1024
 
-
 unsigned long previousMillis = 0; // will store last time a CAN Message was send
 const int interval = 1000;        // interval at which send CAN Messages (milliseconds)
 const int rx_queue_size = 10;     // Receive Queue size
@@ -26,7 +25,7 @@ typedef struct
 } CanMessage;
 
 #define QUEUE_LENGTH 20
-#define QUEUE_ITEM_SIZE sizeof(CanMessage)
+#define QUEUE_ITEM_SIZE sizeof(CANMessage)
 
 #define MAX_BUFFER_SIZE 200
 
@@ -63,14 +62,9 @@ void setup()
   const ACAN_ESP32_Filter filter = ACAN_ESP32_Filter::singleStandardFilter(ACAN_ESP32_Filter::data, 0xfff, 0xfff);
 
   ACAN_ESP32::can.begin(settings, filter);
-  // setup serial event callback function
 
-  // xTaskCreatePinnedToCore(can_managment_task, "can_managment_task", 40000, NULL, 0, NULL, 0);
-  xTaskCreatePinnedToCore(uart_managment_task, "uart_managment_task", 40000, NULL, 0, NULL, 0);
-  // while (1){
-  //   send_test_message();
-  //   delay(100);
-  // }
+  xTaskCreatePinnedToCore(can_managment_task, "can_managment_task", 40000, NULL, 0, NULL, 0);
+  xTaskCreatePinnedToCore(uart_managment_task, "uart_managment_task", 40000, NULL, 0, NULL, 1);
 }
 
 void send_test_message()
@@ -86,33 +80,23 @@ void send_test_message()
 
 void loop()
 {
-  CANMessage frame;
-  if (uart_rx_buffer_index > 2 && uart_rx_cobs_buffer[0] == 0 && uart_rx_cobs_buffer[uart_rx_buffer_index - 1] == 0)
-  {
-    cobs_decode(uart_rx_cobs_buffer + 1, uart_rx_buffer_index - 2, uart_rx_buffer);
+  //taskYIELD();
+}
 
-    uart_rx_buffer_index = 0;
-    uint8_t num_messages = uart_rx_buffer[0];
-    uint16_t previous_offset = 1;
-    for (int i = 0; i < num_messages; i++)
+void can_managment_task(void *pvParameters)
+{
+  CANMessage frame;
+  while (1)
+  {
+    if (ACAN_ESP32::can.receive(frame))
     {
-      CanMessage ToCanTx;
-      ToCanTx.id = uart_rx_buffer[i + previous_offset];
-      ToCanTx.len = uart_rx_buffer[i + previous_offset + 1];
-      for (int j = 0; j < ToCanTx.len; j++)
-      {
-        ToCanTx.data[j] = uart_rx_buffer[i + previous_offset + 2 + j];
-      }
-      previous_offset += ToCanTx.len + 1;
-      frame.ext = false;
-      frame.id = ToCanTx.id;
-      frame.len = ToCanTx.len;
-      for (int i = 0; i < ToCanTx.len; i++)
-      {
-        frame.data[i] = ToCanTx.data[i];
-      }
+      xQueueSend(canRX_queue, &frame, 0);
+    }
+    if (xQueueReceive(canTX_queue, &frame, 0))
+    {
       ACAN_ESP32::can.tryToSend(frame);
     }
+    //taskYIELD();
   }
 }
 
@@ -121,7 +105,7 @@ void uart_managment_task(void *pvParameters)
   CANMessage frame;
   while (1)
   {
-    if (ACAN_ESP32::can.receive(frame))
+    if (xQueueReceive(canRX_queue, &frame, 0))
     {
       uart_tx_buffer[0] = frame.id;
       uart_tx_buffer[1] = frame.len;
@@ -134,10 +118,10 @@ void uart_managment_task(void *pvParameters)
       for (int i = 0; i < cobs_len; i++)
       {
         Serial.write(uart_tx_cobs_buffer[i]);
-        // No DMA :(
       }
       Serial.write(0);
     }
+    //taskYIELD();
   }
 }
 
@@ -199,30 +183,9 @@ uint16_t cobs_decode(const uint8_t *buffer, size_t length, void *data)
   return (decode - (uint8_t *)data);
 }
 
-void update_previous_bytes(uint8_t *previous_bytes, uint8_t new_byte)
-{
-  previous_bytes[0] = previous_bytes[1];
-  previous_bytes[1] = previous_bytes[2];
-  previous_bytes[2] = new_byte;
-}
-
-uint8_t check_all_previous_bytes_zero(uint8_t *previous_bytes)
-{
-  if (previous_bytes[0] == 0 && previous_bytes[1] == 0 && previous_bytes[2] == 0)
-  {
-    return 1;
-  }
-  else
-  {
-    return 0;
-  }
-}
-
 void uart_rx()
 {
-  // while(Serial.available()){
-  //   Serial.print(Serial.read(), HEX);
-  // }
+  CANMessage frame;
   uint8_t buffer[1];
   while (Serial.available())
   {
@@ -233,12 +196,25 @@ void uart_rx()
 
     uart_rx_cobs_buffer[uart_rx_buffer_index] = buffer[0];
     uart_rx_buffer_index++;
-  }
 
-  update_previous_bytes(previous_bytes, uart_rx_cobs_buffer[uart_rx_buffer_index]);
+    if (uart_rx_buffer_index > 2 && uart_rx_cobs_buffer[0] == 0 && uart_rx_cobs_buffer[uart_rx_buffer_index - 1] == 0)
+    {
+      cobs_decode(uart_rx_cobs_buffer + 1, uart_rx_buffer_index - 2, uart_rx_buffer);
 
-  if (uart_rx_cobs_buffer[0] != 0)
-  {
-    uart_rx_buffer_index = 0;
+      uart_rx_buffer_index = 0;
+      uint8_t num_messages = uart_rx_buffer[0];
+      uint16_t previous_offset = 1;
+      for (int i = 0; i < num_messages; i++)
+      {
+        frame.id = uart_rx_buffer[i + previous_offset];
+        frame.len = uart_rx_buffer[i + previous_offset + 1];
+        for (int j = 0; j < frame.len; j++)
+        {
+          frame.data[j] = uart_rx_buffer[i + previous_offset + 2 + j];
+        }
+        previous_offset += frame.len + 1;
+        xQueueSend(canTX_queue, &frame, 0);
+      }
+    }
   }
 }
